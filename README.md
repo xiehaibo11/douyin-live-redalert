@@ -27,6 +27,21 @@ bun run live:start
 - 本机已验证：类型检查、生产构建、174 个测试及浏览器模拟对局流程。
 - 待完成：真实抖音数据接入、Windows 实机验收、长时间高兵力压力测试。
 
+## 开发者从这里开始
+
+初次参与请先读开发指南，再按事件协议与开发路线选择任务。以下文档描述当前实现，不代表待开发功能已经完成。
+
+| 文档 | 内容 |
+| --- | --- |
+| [开发指南](docs/DEVELOPMENT.md) | 项目边界、架构、关键代码、启动、测试、资源准备和故障排查 |
+| [事件协议](docs/EVENT_PROTOCOL.md) | 当前 HTTP/SSE 接口、字段单位、模拟示例，以及待实现的抖音映射 |
+| [开发路线与验收](docs/ROADMAP.md) | 已确认需求、初版参数、待开发任务、优先级与验收条件 |
+| [参与贡献](CONTRIBUTING.md) | 分支、改动范围、提交前检查和交接要求 |
+
+当前界面如下，均使用本地模拟数据，不能视为真实抖音接入证明。
+
+<img src="docs/images/battle.png" alt="竖屏左右战场、全局小地图和本局贡献榜" width="260"> <img src="docs/images/settlement.png" alt="胜负、贡献 MVP 和 10 秒倒计时结算看板" width="260">
+
 ## 上游与参考项目
 
 主工程保留上游 `ts-redalert2` 的 Git 历史、GPL-3.0 许可证及原有说明，开发起点为提交 `823c6637bab9ca1edafaa022a1040ed1fc59c274`。
@@ -97,15 +112,15 @@ This project is written in TypeScript. Its goal is to fully match and surpass th
 ### 安装与启动
 
 ```bash
-cd redalert2
-bun install
-bun run dev
+cd douyin-live-redalert
+bun install --frozen-lockfile
+bun run dev:bun
 ```
 
 默认访问地址：
 
 ```text
-http://127.0.0.1:4000
+https://127.0.0.1:4000
 ```
 
 生产构建与预览：
@@ -138,7 +153,7 @@ bun run live:start
 
 生成文件和下载缓存不纳入 Git。缓存位于 `.artifacts/source/`，已有缓存时无需重复下载。资源包、缓存及构建目录需要约 1 GiB 的可用空间。也可以单独运行 `bun run assets:prepare`，或用 `bun run assets:prepare "本地素材包.7z"` 指定包含 `RA2.MIX`、`LANGUAGE.MIX` 的素材包。
 
-开发时在两个终端分别运行 `bun run live:runtime` 和 `bun run dev`，访问 Vite 输出的 HTTPS 地址（默认端口 4000）。Vite 会将直播 API 转发到本机 4189 端口。
+开发时在两个终端分别运行 `bun run live:runtime` 和 `bun run dev:bun`，访问 Vite 输出的 HTTPS 地址（默认端口 4000）。Vite 会将直播 API 转发到本机 4189 端口。
 
 ```bash
 bun run typecheck:entry
@@ -151,7 +166,7 @@ bun run debug:live-interaction
 
 直播模块已纳入主入口类型检查和生产构建。端到端脚本使用本机 Chrome 或 Playwright Chromium，实际验证模拟出兵、自动战斗、基地摧毁、10 秒结算看板、贡献榜冻结、自动重开、积分清零，以及 540 像素和 390 像素竖屏无横向裁切。缺少浏览器时运行 `bunx playwright install chromium`，或用 `CHROME_PATH` 指定 Chrome 程序路径。测试报告和截图保存在 `.artifacts/live-interaction/`。
 
-仓库当前已经不再只依赖手点验证。`scripts/` 下维护了一组可直接执行的回归脚本，主要覆盖大厅、进图、机制和 tester 入口。
+下方回归命令列表保留自上游，其中多数 `scripts/` 文件未随本仓库提交。当前可用的脚本及检查命令以[开发指南](docs/DEVELOPMENT.md)为准；直播端到端验证使用 `bun run debug:live-interaction`。
 
 常用命令包括：
 
