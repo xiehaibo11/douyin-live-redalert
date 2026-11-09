@@ -39,7 +39,7 @@ export class BuildingAnimArtProps {
     constructor() {
         this.animsByType = new Map();
     }
-    read(config: IniSection, objectManager: any): void {
+    read(config: Pick<IniSection, 'getString' | 'getBool' | 'getNumber'>, objectManager: any): void {
         ANIM_PROP_NAMES.forEach((propNames, type) => {
             const anims: BuildingAnimData[] = [];
             propNames.forEach((propName) => {

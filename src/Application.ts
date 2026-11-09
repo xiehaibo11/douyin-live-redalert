@@ -43,12 +43,12 @@ const optionalDevModuleImporters: Record<string, () => Promise<any>> = {
     './tools/InfantryTester': () => importDevModuleByPath('./tools/InfantryTester'),
     './tools/AircraftTester': () => importDevModuleByPath('./tools/AircraftTester'),
     './tools/VehicleTester': () => importDevModuleByPath('./tools/VehicleTester'),
-    './tools/TestToolSupport': () => importDevModuleByPath('./tools/TestToolSupport'),
+    './tools/TestToolSupport': () => import('./tools/TestToolSupport'),
     './tools/ShpTester': () => importDevModuleByPath('./tools/ShpTester'),
     './tools/WorldSceneTester': () => importDevModuleByPath('./tools/WorldSceneTester'),
     './tools/UnitMovementTester': () => importDevModuleByPath('./tools/UnitMovementTester'),
     './tools/PerformanceTester': () => importDevModuleByPath('./tools/PerformanceTester'),
-    './tools/LiveInteractionTester': () => importDevModuleByPath('./tools/LiveInteractionTester'),
+    './tools/LiveInteractionTester': () => import('./tools/LiveInteractionTester'),
     './tools/SceneSandboxTester': () => importDevModuleByPath('./tools/SceneSandboxTester'),
 };
 
@@ -400,7 +400,7 @@ export class Application {
         };
     }
     private applyRootLayout(viewport: ViewportRect): void {
-        if (!this.rootEl) {
+        if (!this.rootEl || this.rootEl.dataset.liveBroadcastFrame === '1') {
             return;
         }
         this.rootEl.style.width = `${viewport.width}px`;

@@ -19,6 +19,8 @@
     "sim:self-test": "node scripts/sim-self-test.mjs",
     "preview": "bun --bun vite preview",
     "live:runtime": "bun scripts/live-interaction-runtime.mjs",
+    "assets:prepare": "bun scripts/prepare-live-assets.ts",
+    "live:start": "bun run assets:prepare && bun run build && bun run live:runtime",
     "live:runtime:build": "bun --bun vite build && bun scripts/live-interaction-runtime.mjs",
     "debug:skirmish": "bun scripts/skirmish-flow.mjs",
     "debug:live-interaction": "bun scripts/live-interaction-flow.mjs",

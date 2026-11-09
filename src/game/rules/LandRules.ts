@@ -1,7 +1,7 @@
 import { SpeedType } from "@/game/type/SpeedType";
 export class LandRules {
     private speedModifiers: Map<SpeedType, number>;
-    private buildable: boolean;
+    public buildable: boolean;
     constructor() {
         this.speedModifiers = new Map();
     }

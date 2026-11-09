@@ -90,6 +90,11 @@ export class MixFile {
     public containsFile(filename: string): boolean {
         return this.index.has(MixEntry.hashFilename(filename));
     }
+    public *entries(): IterableIterator<[number, Uint8Array]> {
+        for (const entry of this.index.values()) {
+            yield [entry.hash, VirtualFile.factory(this.stream, String(entry.hash), this.dataStart + entry.offset, entry.length).getBytes()];
+        }
+    }
     public openFile(filename: string): VirtualFile {
         const fileId = MixEntry.hashFilename(filename);
         const entry = this.index.get(fileId);

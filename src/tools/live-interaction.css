@@ -1,0 +1,29 @@
+.live-broadcast-hud { position:absolute; inset:0 0 auto; height:88px; z-index:5; padding:10px 12px; box-sizing:border-box; color:#f5ecd1; background:linear-gradient(#111824f5,#111824dd); font-family:Arial,'Microsoft YaHei',sans-serif; }
+.live-broadcast-hud .live-hud-heading { display:flex; align-items:center; justify-content:space-between; font-size:12px; margin-bottom:8px; }
+.live-hud-heading button { color:#eadba9; background:#253044; border:1px solid #5b6575; border-radius:4px; padding:3px 9px; cursor:pointer; }
+.live-armies { display:flex; justify-content:space-between; gap:8px; font-size:11px; }
+.live-armies strong { font-size:15px; }
+.live-army-red { color:#ff9c8c; } .live-army-blue { color:#87cfff; text-align:right; }
+.live-pressure { margin-top:7px; height:5px; background:#3897cc; border-radius:3px; overflow:hidden; }
+.live-pressure-fill { height:100%; width:50%; background:#d24f46; transition:width 700ms ease; }
+.live-contribution { position:absolute; inset:auto 8px 8px; height:154px; z-index:5; box-sizing:border-box; padding:9px 12px; color:#ece8de; background:#111a27ee; border:1px solid #536171; border-radius:6px; font:12px Arial,'Microsoft YaHei',sans-serif; }
+.live-contribution-heading { display:flex; justify-content:space-between; align-items:center; margin-bottom:7px; }
+.live-contribution-heading strong { color:#f0d18b; font-size:14px; }
+.live-contribution-heading span { font-size:10px; color:#9eacba; }
+.live-rank-row { display:grid; grid-template-columns:20px minmax(0,1fr) auto; align-items:center; gap:6px; min-height:20px; }
+.live-rank-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.live-rank-value { text-align:right; color:#f3d18a; font-variant-numeric:tabular-nums; }
+.live-rank-meta { font-size:10px; color:#9eacba; }
+.live-rank-empty { text-align:center; padding:20px 0; color:#9eacba; }
+.live-settlement { position:absolute; inset:0; z-index:20; display:flex; align-items:center; justify-content:center; padding:20px 12px; box-sizing:border-box; background:#070c15d9; color:#f4ecda; font-family:Arial,'Microsoft YaHei',sans-serif; }
+.live-settlement[hidden] { display:none; }
+.live-settlement-card { width:100%; max-height:90%; overflow:auto; padding:24px 16px; box-sizing:border-box; border:1px solid #a08a57; border-radius:12px; background:linear-gradient(160deg,#263247,#101724 80%); box-shadow:0 20px 70px #0008; }
+.live-result-kicker { text-align:center; color:#aeb9c8; font-size:12px; letter-spacing:3px; }
+.live-result-title { text-align:center; font-size:30px; margin:12px 0; color:#f1cf82; }
+.live-result-mvp { padding:12px; margin-bottom:16px; background:#ffffff08; border-radius:6px; font-size:13px; line-height:1.7; text-align:center; }
+.live-result-columns { display:flex; justify-content:space-between; color:#aeb9c8; font-size:11px; margin-bottom:6px; }
+.live-result-rows { max-height:30vh; overflow:auto; }
+.live-settlement .live-rank-row { min-height:36px; border-bottom:1px solid #ffffff0c; }
+.live-result-countdown { text-align:center; margin-top:22px; color:#bfc9d6; font-size:13px; }
+.live-result-countdown strong { display:block; font-size:44px; line-height:1.2; color:#f1cf82; font-variant-numeric:tabular-nums; }
+.live-result-policy { text-align:center; color:#93a2b4; font-size:10px; line-height:1.6; margin-top:12px; }

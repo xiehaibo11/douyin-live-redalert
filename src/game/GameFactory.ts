@@ -35,12 +35,7 @@ import { Ai } from './ai/Ai';
 import { BotFactory } from './bot/BotFactory';
 import { BotManager } from './BotManager';
 import { isHumanPlayerInfo } from './gameopts/GameOpts';
-interface GameMode {
-    type: string;
-}
-interface GameModeRegistry {
-    getById(modeId: string): GameMode;
-}
+import type { GameModes } from './ini/GameModes';
 interface PlayerInfo {
     countryId: string;
     colorId: string;
@@ -64,7 +59,7 @@ interface MultiplayerCountry {
     name: string;
 }
 export class GameFactory {
-    static create(gameOptions: GameCreationOptions, mapData: any, baseRules: IniFile, baseArt: IniFile, aiConfig: any, modRules: IniFile, additionalRules: IniFile[], randomSeed1: number | string, randomSeed2: number, gameOpts: GameOpts, gameModeRegistry: GameModeRegistry, skipStalemate: boolean, botConfig: any, debugFlags: any, speedCheat: any, debugBotIndex?: any, actionLogger?: any): Game {
+    static create(gameOptions: GameCreationOptions, mapData: any, baseRules: IniFile, baseArt: IniFile, aiConfig: any, modRules: IniFile, additionalRules: IniFile[], randomSeed1: number | string, randomSeed2: number, gameOpts: GameOpts, gameModeRegistry: GameModes, skipStalemate: boolean, botConfig: any, debugFlags: any, speedCheat: any, debugBotIndex?: any, actionLogger?: any): Game {
         const mergedRules: IniFile = baseRules.clone().mergeWith(modRules);
         for (const additionalRule of additionalRules) {
             mergedRules.mergeWith(additionalRule);
@@ -82,7 +77,7 @@ export class GameFactory {
         const prng: Prng = Prng.factory(randomSeed1, randomSeed2);
         const gameMap: GameMap = new GameMap(gameOptions as any, mapData, rules, prng.generateRandomInt.bind(prng));
         const world: World = new World();
-        const gameMode: GameMode = gameModeRegistry.getById(gameOpts.gameMode as any);
+        const gameMode = gameModeRegistry.getById(gameOpts.gameMode);
         const playerList: PlayerList = new PlayerList();
         const alliances: Alliances = new Alliances(playerList);
         const unitSelection: UnitSelection = new UnitSelection();

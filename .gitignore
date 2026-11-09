@@ -62,7 +62,10 @@ docs/
 
 public/cdn/
 .artifacts/
-scripts/
+scripts/*
+!scripts/live-interaction-runtime.mjs
+!scripts/prepare-live-assets.ts
+!scripts/live-interaction-flow.mjs
 
 # Optional REPL history
 .node_repl_history

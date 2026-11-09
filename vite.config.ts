@@ -13,6 +13,9 @@ export default defineConfig({
         port: devPort,
         strictPort: true,
         https: manualHttpsConfig ?? {},
+        proxy: {
+            '/api/live-interaction': { target: 'http://127.0.0.1:4189', changeOrigin: true },
+        },
         headers: {
             'Cross-Origin-Embedder-Policy': 'require-corp',
             'Cross-Origin-Opener-Policy': 'same-origin',

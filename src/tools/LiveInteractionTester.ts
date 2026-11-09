@@ -38,6 +38,11 @@ import { VxlGeometryCache } from '@/engine/gfx/geometry/VxlGeometryCache';
 import { ImageFinder } from '@/engine/ImageFinder';
 import { MissingImageError } from '@/engine/ImageFinder';
 import { ObjectType } from '@/engine/type/ObjectType';
+import { LiveRound } from '@/game/live/LiveRound';
+import { ContributionLedger, type Contributor } from '@/game/live/ContributionLedger';
+import { armyFocus } from '@/game/live/BroadcastCamera';
+import './live-interaction.css';
+import type { TechnoRules } from '@/game/rules/TechnoRules';
 import { BuildingAnimArtProps } from '@/engine/renderable/entity/building/BuildingAnimArtProps';
 import { TestToolSupport, type TestToolRuntimeContext } from '@/tools/TestToolSupport';
 import { RadialTileFinder } from '@/game/map/tileFinder/RadialTileFinder';
@@ -171,6 +176,14 @@ type UiRefs = {
     codeInput?: HTMLInputElement;
     credentialsGrid?: HTMLDivElement;
     danmakuInput?: HTMLInputElement;
+    roundSummary?: HTMLDivElement;
+    broadcastHud?: HTMLDivElement;
+    contributionRows?: HTMLDivElement;
+    settlement?: HTMLDivElement;
+    settlementRows?: HTMLDivElement;
+    settlementTitle?: HTMLElement;
+    settlementMvp?: HTMLElement;
+    settlementCountdown?: HTMLElement;
 };
 
 type LiveLoadingScreenSession = {
@@ -212,6 +225,13 @@ export class LiveInteractionTester {
     private static statusPollTimer?: number;
     private static orderRefreshTimer?: number;
     private static panelCollapsed = false;
+    private static round = new LiveRound();
+    private static restartTimer?: number;
+    private static restart?: () => Promise<void>;
+    private static seenEvents = new Set<string>();
+    private static contributions = new ContributionLedger();
+    private static roundResults: Contributor[] = [];
+    private static cameraManualUntil = 0;
     private static state = {
         ready: false,
         mode: 'mock' as LiveMode,
@@ -242,7 +262,12 @@ export class LiveInteractionTester {
 
     static async main(_mixFileLoader: any, gameMapFile: any, parentElement: HTMLElement, strings: StringsLike, context: TestToolRuntimeContext = {}, deps: LiveInteractionRuntimeDeps = {}): Promise<void> {
         await this.destroy();
-        const root = TestToolSupport.prepareHost(context, DEFAULT_VIEWPORT_WIDTH, DEFAULT_VIEWPORT_HEIGHT);
+        this.contributions = new ContributionLedger();
+        this.roundResults = [];
+        this.cameraManualUntil = 0;
+        this.restart = () => this.main(_mixFileLoader, gameMapFile, parentElement, strings, context, deps);
+        const initialViewport = this.measureViewport();
+        const root = TestToolSupport.prepareHost(context, initialViewport.width, initialViewport.height);
         const loadingStartedAt = performance.now();
         const loadingScreen = this.createLoadingScreen(root, strings);
         try {
@@ -267,6 +292,7 @@ export class LiveInteractionTester {
 
             const battle = await this.initializeBattle(gameMapFile, strings, context, deps);
             this.battle = battle;
+            this.round.start(Date.now());
             loadingScreen.api.onLoadProgress(86);
 
             this.installResponsiveViewport();
@@ -286,6 +312,14 @@ export class LiveInteractionTester {
             debugRoot.liveInteraction = {
                 snapshot: () => this.getDebugSnapshot(),
                 emitMock: (kind: InteractionKind, payload: Record<string, unknown> = {}) => this.postJson(`${API_BASE}/mock`, { kind, ...payload }),
+                advanceTicks: (count: number) => {
+                    if (!Number.isInteger(count) || count < 1 || count > 600 || this.state.mode !== 'mock') throw new Error('Invalid mock tick count');
+                    for (let index = 0; index < count && this.round.phase === 'running'; index++) {
+                        this.updateBattle();
+                        if (index % 36 === 0) this.refreshOrders();
+                    }
+                    this.syncState();
+                },
             };
             if (context.rootElement) {
                 context.rootElement.dataset.ra2LiveInteractionReady = '1';
@@ -297,6 +331,11 @@ export class LiveInteractionTester {
 
     static async destroy(): Promise<void> {
         TestToolSupport.clearState(TOOL_NAME);
+        this.round.phase = 'loading';
+        if (this.restartTimer) clearTimeout(this.restartTimer);
+        this.restartTimer = undefined;
+        this.restart = undefined;
+        this.seenEvents.clear();
         this.eventSource?.close();
         this.eventSource = undefined;
         if (this.gameTickTimer) {
@@ -329,11 +368,14 @@ export class LiveInteractionTester {
             host.style.zIndex = '';
             host.style.left = '';
             host.style.top = '';
+            host.style.transform = '';
+            host.style.top = '';
             host.style.right = '';
             host.style.bottom = '';
             host.style.cursor = '';
             host.style.touchAction = '';
             delete host.dataset.ra2LiveInteractionReady;
+            delete host.dataset.liveBroadcastFrame;
         }
         this.ui = {};
         this.panelCollapsed = false;
@@ -352,16 +394,21 @@ export class LiveInteractionTester {
     }
 
     private static buildLayout(root: HTMLElement, strings: StringsLike): void {
+        root.dataset.liveBroadcastFrame = '1';
         root.replaceChildren();
         root.style.position = 'fixed';
         root.style.inset = '0';
         root.style.display = 'block';
-        root.style.width = '100vw';
-        root.style.height = '100vh';
+        const viewport = this.measureViewport();
+        root.style.width = `${viewport.width}px`;
+        root.style.height = `${viewport.height}px`;
+        root.style.top = `${Math.floor((window.innerHeight - viewport.height) / 2)}px`;
+        root.style.left = '50%';
+        root.style.transform = 'translateX(-50%)';
         root.style.overflow = 'hidden';
         root.style.background = 'radial-gradient(circle at 50% 45%, #3f0f0f 0%, #180404 45%, #090202 100%)';
         root.style.zIndex = '1';
-        this.panelCollapsed = false;
+        this.panelCollapsed = true;
 
         const canvasPane = document.createElement('div');
         canvasPane.style.position = 'absolute';
@@ -394,7 +441,7 @@ export class LiveInteractionTester {
         minimapShell.dataset.liveMinimap = '1';
 
         const minimapBadge = document.createElement('div');
-        minimapBadge.textContent = '正式小地图';
+        minimapBadge.textContent = '全局地图';
         minimapBadge.style.position = 'absolute';
         minimapBadge.style.left = `${MINIMAP_MARGIN}px`;
         minimapBadge.style.bottom = `${MINIMAP_MARGIN + MINIMAP_SIZE + 8}px`;
@@ -448,9 +495,13 @@ export class LiveInteractionTester {
         title.textContent = strings.get('GUI:MainMenu') ? '直播互动模式' : 'Live Interaction';
         title.style.fontSize = '24px';
         title.style.fontWeight = '700';
+        const roundSummary = document.createElement('div');
+        roundSummary.dataset.liveRound = '1';
+        roundSummary.setAttribute('role', 'status');
+        roundSummary.style.cssText = 'padding:12px;border:1px solid #ffd84a;font-weight:bold;white-space:pre-line';
 
         const subtitle = document.createElement('div');
-        subtitle.textContent = '当前直接复用了正式遭遇战的世界渲染、交互和小地图组件，只隐藏侧边栏和底栏。红方老家在上、蓝方老家在下，双方增援会默认朝敌方老家移动攻击，可用屏幕边缘滚动、右键拖拽、滚轮缩放和小地图跳转查看战场。';
+        subtitle.textContent = '红方基地在左侧，蓝方基地在右侧。使用模拟事件召唤增援，摧毁敌方基地获胜。可右键拖动、滚轮缩放，或点击小地图查看战场。';
         subtitle.style.fontSize = '12px';
         subtitle.style.opacity = '0.85';
         subtitle.style.lineHeight = '1.5';
@@ -473,7 +524,7 @@ export class LiveInteractionTester {
         modeSelect.dataset.liveInput = 'mode';
         modeSelect.innerHTML = `
             <option value="mock">本地模拟</option>
-            <option value="live">B站直播</option>
+            <option value="live" disabled>真实采集接入待开发</option>
         `;
         modeSelect.value = 'mock';
 
@@ -509,10 +560,8 @@ export class LiveInteractionTester {
             this.buildButton('模拟进房', 'mock-room-enter'),
             this.buildButton('模拟点赞', 'mock-like'),
             this.buildButton('模拟礼物', 'mock-gift'),
-            this.buildButton('模拟上舰', 'mock-guard'),
-            this.buildButton('模拟醒目留言', 'mock-super-chat'),
-            this.buildButton('红方弹幕(上)', 'mock-danmaku-left'),
-            this.buildButton('蓝方弹幕(下)', 'mock-danmaku-right'),
+            this.buildButton('红方弹幕(左)', 'mock-danmaku-left'),
+            this.buildButton('蓝方弹幕(右)', 'mock-danmaku-right'),
             this.buildButton('战场全览', 'focus-center'),
         );
 
@@ -546,10 +595,10 @@ export class LiveInteractionTester {
         mappingSummary.style.whiteSpace = 'pre-wrap';
         mappingSummary.textContent = [
             '事件映射',
-            '进房 / 点赞 -> 红方上方增援',
-            '礼物 / 上舰 / 醒目留言 -> 蓝方下方增援',
-            '弹幕含“红/上/top” -> 红方上路',
-            '弹幕含“蓝/下/bottom” -> 蓝方下路',
+            '进房 / 点赞 -> 红方左侧增援',
+            '礼物 -> 观众所属阵营增援',
+            '弹幕含“红/上/top” -> 红方左侧',
+            '弹幕含“蓝/下/bottom” -> 蓝方右侧',
             '重装与精英单位会优先显示观众昵称',
         ].join('\n');
 
@@ -569,6 +618,7 @@ export class LiveInteractionTester {
         modeRow.append(modeLabel, modeSelect);
         panelContent.append(
             title,
+            roundSummary,
             subtitle,
             statusBadge,
             modeRow,
@@ -587,8 +637,11 @@ export class LiveInteractionTester {
         );
         panel.append(panelToggle, panelContent);
         root.append(canvasPane, overlayPane, minimapShell, minimapBadge, panel);
+        minimapShell.appendChild(minimapBadge);
+        minimapBadge.style.cssText = 'position:absolute;left:50%;top:-21px;bottom:auto;transform:translateX(-50%);white-space:nowrap;font-size:10px;padding:2px 7px;background:#101a28df;color:#dfd4ae;border:1px solid #667180';
         TestToolSupport.applyPanelTheme(panel);
         this.ui = {
+            roundSummary,
             host: root as HTMLDivElement,
             canvasPane,
             overlayPane,
@@ -611,6 +664,10 @@ export class LiveInteractionTester {
             credentialsGrid,
             danmakuInput,
         };
+        this.buildBroadcastHud(root);
+        canvasPane.addEventListener('pointerdown', () => { this.cameraManualUntil = Date.now() + 4000; });
+        canvasPane.addEventListener('pointermove', event => { if (event.buttons) this.cameraManualUntil = Date.now() + 4000; });
+        canvasPane.addEventListener('wheel', () => { this.cameraManualUntil = Date.now() + 4000; }, { passive: true });
         this.updatePanelLayout(this.measureViewport());
         modeSelect.addEventListener('change', () => {
             this.state.mode = modeSelect.value === 'live' ? 'live' : 'mock';
@@ -691,13 +748,13 @@ export class LiveInteractionTester {
         const bottomCountryId = this.findNamedIndex(countryNames, ['Russians', 'Russia', 'Confederation']);
         return [
             {
-                name: '红方上方老家',
+                name: '红方左侧老家',
                 countryId: topCountryId,
                 colorId: 0,
                 teamId: NO_TEAM_ID,
             },
             {
-                name: '蓝方下方老家',
+                name: '蓝方右侧老家',
                 countryId: bottomCountryId,
                 colorId: 1,
                 teamId: NO_TEAM_ID,
@@ -730,22 +787,110 @@ export class LiveInteractionTester {
         return button;
     }
 
+    private static buildBroadcastHud(root: HTMLElement): void {
+        const hud = document.createElement('div');
+        hud.className = 'live-broadcast-hud';
+        hud.dataset.liveBroadcast = '1';
+        hud.innerHTML = '<div class="live-hud-heading"><b data-live-round-label>直播对战</b><span>自动镜头</span></div><div class="live-armies"><div class="live-army-red" data-live-army-red></div><div class="live-army-blue" data-live-army-blue></div></div><div class="live-pressure"><div class="live-pressure-fill" data-live-pressure></div></div>';
+        const settings = this.buildButton('设置', 'toggle-panel');
+        settings.dataset.liveSettings = '1';
+        settings.onclick = () => void this.handleUiAction('toggle-panel');
+        hud.querySelector('.live-hud-heading')!.appendChild(settings);
+        const contribution = document.createElement('div');
+        contribution.className = 'live-contribution';
+        contribution.innerHTML = '<div class="live-contribution-heading"><strong>本局贡献榜</strong><span>礼物贡献另计 · 基础上限1万</span></div>';
+        const contributionRows = document.createElement('div');
+        contributionRows.dataset.liveRanking = '1';
+        contribution.appendChild(contributionRows);
+        const settlement = document.createElement('div');
+        settlement.className = 'live-settlement';
+        settlement.dataset.liveSettlement = '1';
+        settlement.hidden = true;
+        settlement.tabIndex = 0;
+        settlement.setAttribute('role', 'dialog');
+        settlement.setAttribute('aria-modal', 'true');
+        settlement.setAttribute('aria-label', '本局结算');
+        settlement.innerHTML = '<div class="live-settlement-card"><div class="live-result-kicker">本局战报</div><h2 class="live-result-title"></h2><div class="live-result-mvp"></div><div class="live-result-columns"><span>观众贡献排行</span><span>总贡献分</span></div><div class="live-result-rows"></div><div class="live-result-countdown"><strong data-live-countdown>10</strong>秒后自动开始下一局</div><div class="live-result-policy">礼物每抖币计1万分 · 点赞每次1分 · 弹幕每条20分<br>每人每局基础贡献最多1万分</div></div>';
+        settlement.addEventListener('keydown', event => { if (event.key === 'Tab') event.preventDefault(); });
+        root.append(hud, contribution, settlement);
+        Object.assign(this.ui, {
+            broadcastHud: hud,
+            contributionRows,
+            settlement,
+            settlementRows: settlement.querySelector('.live-result-rows'),
+            settlementTitle: settlement.querySelector('.live-result-title'),
+            settlementMvp: settlement.querySelector('.live-result-mvp'),
+            settlementCountdown: settlement.querySelector('[data-live-countdown]'),
+        });
+    }
+
+    private static renderContributionRows(container: HTMLElement | undefined, players: Contributor[], limit: number): void {
+        if (!container) return;
+        container.replaceChildren();
+        if (!players.length) {
+            const empty = document.createElement('div');
+            empty.className = 'live-rank-empty';
+            empty.textContent = '等待观众参与';
+            container.appendChild(empty);
+        }
+        players.slice(0, limit).forEach((player, index) => {
+            const row = document.createElement('div');
+            row.className = 'live-rank-row';
+            row.dataset.viewerId = player.id;
+            row.title = `礼物贡献 ${player.giftScore.toLocaleString('zh-CN')} · 基础贡献 ${player.baseScore.toLocaleString('zh-CN')}`;
+            const rank = document.createElement('span');
+            rank.textContent = String(index + 1);
+            const name = document.createElement('div');
+            name.className = 'live-rank-name';
+            name.style.color = player.side === 'left' ? '#ffb0a0' : '#9bd8ff';
+            name.textContent = player.name;
+            if (container === this.ui.settlementRows) {
+                const meta = document.createElement('div');
+                meta.className = 'live-rank-meta';
+                meta.textContent = `礼物 ${player.giftScore.toLocaleString('zh-CN')} · 基础 ${player.baseScore.toLocaleString('zh-CN')}`;
+                name.appendChild(meta);
+            }
+            const score = document.createElement('strong');
+            score.className = 'live-rank-value';
+            score.textContent = player.score.toLocaleString('zh-CN');
+            row.append(rank, name, score);
+            container.appendChild(row);
+        });
+    }
+
+    private static updateBroadcastHud(): void {
+        const battle = this.battle;
+        const hud = this.ui.broadcastHud;
+        if (!battle || !hud) return;
+        const left = this.countAliveUnits(battle.leftPlayer), right = this.countAliveUnits(battle.rightPlayer);
+        hud.querySelector('[data-live-round-label]')!.textContent = `第 ${this.round.id} 局 · ${this.round.phase === 'settling' ? '已结束' : '直播对战'}`;
+        hud.querySelector('[data-live-army-red]')!.textContent = `红方 ${left} 兵 · 基地 ${this.getBaseStatus(battle.leftBase, '').hpDisplay}`;
+        hud.querySelector('[data-live-army-blue]')!.textContent = `蓝方 ${right} 兵 · 基地 ${this.getBaseStatus(battle.rightBase, '').hpDisplay}`;
+        (hud.querySelector('[data-live-pressure]') as HTMLElement).style.width = `${left + right ? left / (left + right) * 100 : 50}%`;
+        this.renderContributionRows(this.ui.contributionRows, this.contributions.ranking(), 5);
+    }
+
+    private static showSettlement(): void {
+        const overlay = this.ui.settlement;
+        if (!overlay) return;
+        this.ui.settlementTitle!.textContent = this.round.winner === 'draw' ? '双方平局' : this.round.winner === 'left' ? '红方获胜' : '蓝方获胜';
+        const mvp = this.round.winner === 'draw' ? this.roundResults[0] : this.roundResults.find(player => player.side === this.round.winner);
+        this.ui.settlementMvp!.textContent = mvp ? `贡献 MVP · ${mvp.name}\n礼物贡献 ${mvp.giftScore.toLocaleString('zh-CN')} · 总贡献 ${mvp.score.toLocaleString('zh-CN')}` : '本局暂无胜方观众贡献记录';
+        this.renderContributionRows(this.ui.settlementRows, this.roundResults, 10);
+        overlay.hidden = false;
+        for (const child of this.ui.host!.children) if (child instanceof HTMLElement && child !== overlay) child.inert = true;
+        overlay.focus({ preventScroll: true });
+    }
+
     private static buildHomeButton(): void {
         const button = document.createElement('button');
-        button.textContent = '点此返回主页';
-        button.style.cssText = `
-            position: fixed;
-            left: 50%;
-            top: 10px;
-            transform: translateX(-50%);
-            padding: 10px 20px;
-            z-index: 1000;
-        `;
+        button.textContent = '返回主页';
+        button.style.cssText = 'padding:8px 12px;margin-top:12px';
         TestToolSupport.applyHomeButtonTheme(button);
         button.onclick = () => {
             window.location.hash = '/';
         };
-        document.body.appendChild(button);
+        this.ui.panelContent?.appendChild(button);
         this.disposables.add(() => button.remove());
     }
 
@@ -959,6 +1104,7 @@ export class LiveInteractionTester {
         const localBounds = (gameMap as any).mapBounds.getLocalSize();
         const originalUpdateCamera = worldScene.updateCamera.bind(worldScene);
         worldScene.updateCamera = (pan: { x: number; y: number; }, zoom: number) => {
+            worldScene.camera.zoom = zoom;
             originalUpdateCamera({
                 x: pan.x * zoom,
                 y: pan.y * zoom,
@@ -1015,10 +1161,14 @@ export class LiveInteractionTester {
         const rightFoundation = rightBase.getFoundation();
         const leftBaseCenterRx = leftBase.tile.rx + Math.floor(leftFoundation.width / 2);
         const rightBaseCenterRx = rightBase.tile.rx + Math.floor(rightFoundation.width / 2);
-        const leftAnchor = this.findNearestPassableTile(gameMap, leftBaseCenterRx, leftBase.tile.ry + leftFoundation.height + 2);
-        const rightAnchor = this.findNearestPassableTile(gameMap, rightBaseCenterRx, rightBase.tile.ry - 2);
-        const leftTarget = this.findNearestPassableTile(gameMap, rightBaseCenterRx, rightBase.tile.ry - 1);
-        const rightTarget = this.findNearestPassableTile(gameMap, leftBaseCenterRx, leftBase.tile.ry + leftFoundation.height + 1);
+        const leftCenterRy = leftBase.tile.ry + Math.floor(leftFoundation.height / 2);
+        const rightCenterRy = rightBase.tile.ry + Math.floor(rightFoundation.height / 2);
+        const directionRx = Math.sign(rightBaseCenterRx - leftBaseCenterRx);
+        const directionRy = Math.sign(rightCenterRy - leftCenterRy);
+        const leftAnchor = this.findNearestPassableTile(gameMap, leftBaseCenterRx + directionRx * 2, leftCenterRy + directionRy * 2);
+        const rightAnchor = this.findNearestPassableTile(gameMap, rightBaseCenterRx - directionRx * 2, rightCenterRy - directionRy * 2);
+        const leftTarget = this.findNearestPassableTile(gameMap, rightBaseCenterRx - directionRx * 2, rightCenterRy - directionRy * 2);
+        const rightTarget = this.findNearestPassableTile(gameMap, leftBaseCenterRx + directionRx * 2, leftCenterRy + directionRy * 2);
         const battleCenterTile = gameMap.tiles.getByMapCoords(
             Math.floor(((leftBase.centerTile?.rx ?? leftBaseCenterRx) + (rightBase.centerTile?.rx ?? rightBaseCenterRx)) / 2),
             Math.floor(((leftBase.centerTile?.ry ?? leftBase.tile.ry) + (rightBase.centerTile?.ry ?? rightBase.tile.ry)) / 2),
@@ -1029,13 +1179,14 @@ export class LiveInteractionTester {
 
         this.ui.catalogSummary!.textContent = [
             '单位映射',
-            `红方上方老家: ${leftBaseName}`,
-            `蓝方下方老家: ${rightBaseName}`,
+            `红方左侧老家: ${leftBaseName}`,
+            `蓝方右侧老家: ${rightBaseName}`,
             `红方基础步兵: ${unitCatalog.infantryBasic}`,
             `红方精英步兵: ${unitCatalog.infantryElite}`,
             `蓝方轻装甲: ${unitCatalog.vehicleLight}`,
             `蓝方重装甲: ${unitCatalog.vehicleHeavy}`,
         ].join('\n');
+        this.disposables.add(() => game.dispose());
 
         const debugRoot = ((window as any).__ra2debug ??= {});
         debugRoot.liveInteractionBattle = {
@@ -1121,7 +1272,12 @@ export class LiveInteractionTester {
         const baseUnits = new Set(game.rules.general.baseUnit);
         player.getOwnedObjects()
             .filter((object: any) => object.isUnit?.() && baseUnits.has(object.name))
-            .forEach((object: any) => game.destroyObject(object, undefined, true));
+            .forEach((object: any) => {
+                const type = object.type;
+                game.destroyObject(object, undefined, true);
+                // Initial construction vehicles are setup objects, not battle casualties.
+                player.addUnitsLost(type, -1);
+            });
     }
 
     private static pickHomeBaseName(rules: Rules, art: Art, theater: any, candidates: string[]): string {
@@ -1190,7 +1346,7 @@ export class LiveInteractionTester {
     }
 
     private static canPlaceBuildingAt(gameMap: GameMap, rules: Rules, art: Art, buildingName: string, tile: any): boolean {
-        const buildingRules = rules.getBuilding(buildingName);
+        const buildingRules = rules.getBuilding(buildingName) as TechnoRules;
         const foundation = art.getObject(buildingName, ObjectType.Building).foundation;
         for (let x = 0; x < foundation.width; x += 1) {
             for (let y = 0; y < foundation.height; y += 1) {
@@ -1244,32 +1400,27 @@ export class LiveInteractionTester {
     }
 
     private static measureViewport(): { x: number; y: number; width: number; height: number; } {
-        const host = this.ui.host;
-        const width = Math.max(960, Math.floor(host?.clientWidth || window.innerWidth || DEFAULT_VIEWPORT_WIDTH));
-        const height = Math.max(540, Math.floor(host?.clientHeight || window.innerHeight || DEFAULT_VIEWPORT_HEIGHT));
+        const availableHeight = Math.max(1, Math.floor(window.innerHeight || DEFAULT_VIEWPORT_HEIGHT));
+        const width = Math.max(1, Math.min(Math.floor(window.innerWidth || DEFAULT_VIEWPORT_WIDTH), Math.floor(availableHeight * 9 / 16)));
+        const height = Math.max(1, Math.floor(width * 16 / 9));
         return { x: 0, y: 0, width, height };
     }
 
     private static computePanelWidth(viewport: { width: number; height: number; }): number {
-        const preferredWidth = Math.min(PANEL_WIDTH, Math.max(PANEL_MIN_WIDTH, Math.floor(viewport.width * 0.3)));
-        const maxAllowedWidth = Math.max(PANEL_MIN_WIDTH, viewport.width - MIN_BATTLE_VIEWPORT_WIDTH);
-        return Math.max(PANEL_MIN_WIDTH, Math.min(preferredWidth, maxAllowedWidth));
+        return Math.min(PANEL_WIDTH, Math.max(1, viewport.width - 24));
     }
 
     private static getReservedPanelWidth(viewport: { width: number; height: number; }): number {
-        const panelWidth = this.computePanelWidth(viewport);
-        return this.panelCollapsed
-            ? PANEL_COLLAPSED_VISIBLE_WIDTH + PANEL_MARGIN
-            : panelWidth + PANEL_MARGIN;
+        return 0;
     }
 
     private static computeBattleViewport(viewport: { x: number; y: number; width: number; height: number; }): { x: number; y: number; width: number; height: number; } {
         const reservedWidth = this.getReservedPanelWidth(viewport);
         return {
             x: viewport.x,
-            y: viewport.y,
+            y: viewport.y + 88,
             width: Math.max(1, viewport.width - reservedWidth),
-            height: viewport.height,
+            height: Math.max(1, viewport.height - 250),
         };
     }
 
@@ -1280,10 +1431,11 @@ export class LiveInteractionTester {
         }
         const panelWidth = this.computePanelWidth(viewport);
         const collapsedOffset = Math.max(0, panelWidth - PANEL_COLLAPSED_VISIBLE_WIDTH);
-        panel.style.top = `${PANEL_MARGIN}px`;
+        panel.style.top = '88px';
         panel.style.right = `${PANEL_MARGIN}px`;
         panel.style.width = `${panelWidth}px`;
-        panel.style.height = `${Math.max(220, viewport.height - PANEL_MARGIN * 2)}px`;
+        panel.style.height = `${Math.max(100, viewport.height - 258)}px`;
+        panel.style.visibility = this.panelCollapsed ? 'hidden' : 'visible';
         panel.style.transform = this.panelCollapsed ? `translateX(${collapsedOffset}px)` : 'translateX(0)';
         panel.dataset.collapsed = String(this.panelCollapsed);
         if (this.ui.panelContent) {
@@ -1297,7 +1449,7 @@ export class LiveInteractionTester {
     }
 
     private static computeMinimapSize(viewport: { width: number; height: number; }): number {
-        return Math.max(180, Math.min(MINIMAP_SIZE, Math.floor(Math.min(viewport.width * 0.2, viewport.height * 0.28))));
+        return Math.max(80, Math.min(160, Math.floor(viewport.width * 0.34)));
     }
 
     private static updateMinimapLayout(
@@ -1314,9 +1466,9 @@ export class LiveInteractionTester {
             return;
         }
         const size = this.computeMinimapSize({ width: battleViewport.width, height: viewport.height });
-        const x = MINIMAP_MARGIN;
-        const y = viewport.height - size - MINIMAP_MARGIN;
-        minimap.setFitSize({ width: size, height: size });
+        const x = Math.floor((viewport.width - size) / 2);
+        const y = viewport.height - 176 - Math.floor(size * 0.6);
+        minimap.setFitSize({ width: size, height: Math.floor(size * 0.6) });
         minimap.setPosition(x, y);
         minimap.setZIndex(6);
 
@@ -1324,7 +1476,7 @@ export class LiveInteractionTester {
             this.ui.minimapShell.style.left = `${x}px`;
             this.ui.minimapShell.style.top = `${y}px`;
             this.ui.minimapShell.style.width = `${size}px`;
-            this.ui.minimapShell.style.height = `${size}px`;
+            this.ui.minimapShell.style.height = `${Math.floor(size * 0.6)}px`;
         }
     }
 
@@ -1335,15 +1487,16 @@ export class LiveInteractionTester {
         }
         const battleViewport = this.computeBattleViewport(battle.uiScene.viewport);
         const size = this.computeMinimapSize({ width: battleViewport.width, height: battle.uiScene.viewport.height });
-        const x = MINIMAP_MARGIN;
-        const y = battle.uiScene.viewport.height - size - MINIMAP_MARGIN;
+        const height = Math.floor(size * 0.6);
+        const x = Math.floor((battle.uiScene.viewport.width - size) / 2);
+        const y = battle.uiScene.viewport.height - 176 - height;
         return {
             x,
             y,
             width: size,
-            height: size,
+            height,
             centerX: x + size / 2,
-            centerY: y + size / 2,
+            centerY: y + height / 2,
         };
     }
 
@@ -1358,8 +1511,9 @@ export class LiveInteractionTester {
         const battleViewport = this.computeBattleViewport(viewport);
         this.updatePanelLayout(viewport);
         this.renderer?.setSize(viewport.width, viewport.height);
-        this.ui.host!.style.width = '100vw';
-        this.ui.host!.style.height = '100vh';
+        this.ui.host!.style.width = `${viewport.width}px`;
+        this.ui.host!.style.height = `${viewport.height}px`;
+        this.ui.host!.style.top = `${Math.floor((window.innerHeight - viewport.height) / 2)}px`;
         this.ui.canvasPane!.style.width = '100%';
         this.ui.canvasPane!.style.height = '100%';
         if (!this.battle) {
@@ -1512,11 +1666,11 @@ export class LiveInteractionTester {
         };
     }
 
-    private static createAttackMoveOrder(unit: any, _targetBase: any, fallbackTile: any): AttackMoveOrder {
+    private static createAttackMoveOrder(unit: any, targetBase: any, fallbackTile: any): AttackMoveOrder {
         if (!this.battle) {
             throw new Error('Battle context missing while creating attack-move order');
         }
-        const target = this.battle.game.createTarget(undefined, fallbackTile);
+        const target = this.battle.game.createTarget(targetBase, fallbackTile);
         return new AttackMoveOrder(this.battle.game, this.battle.gameMap).set(unit, target) as AttackMoveOrder;
     }
 
@@ -1628,13 +1782,57 @@ export class LiveInteractionTester {
         return normalized.length > 10 ? normalized.slice(0, 10) : normalized;
     }
 
+    private static followArmies(): void {
+        const battle = this.battle;
+        if (!battle || this.round.phase !== 'running' || Date.now() < this.cameraManualUntil) return;
+        const points = (player: Player) => player.getOwnedObjects().filter((object: any) => object.isUnit?.() && object.isSpawned && !object.isDestroyed).map((object: any) => IsoCoords.vecWorldToScreen(object.position.worldPosition));
+        const left = IsoCoords.vecWorldToScreen(battle.leftBase.position.worldPosition);
+        const right = IsoCoords.vecWorldToScreen(battle.rightBase.position.worldPosition);
+        const focus = armyFocus(points(battle.leftPlayer), points(battle.rightPlayer), { x: (left.x + right.x) / 2, y: (left.y + right.y) / 2 });
+        const target = new MapPanningHelper(battle.gameMap as any).computeCameraPanFromScreen(focus);
+        const current = battle.worldScene.cameraPan.getPan();
+        battle.worldScene.cameraPan.setPan({ x: current.x + (target.x - current.x) * 0.045, y: current.y + (target.y - current.y) * 0.045 });
+    }
+
+    private static updateBattle(): void {
+        const battle = this.battle;
+        if (!battle || this.round.phase !== 'running') return;
+        battle.game.update();
+        if (!this.round.observe(this.getBaseStatus(battle.leftBase, '').isAlive, this.getBaseStatus(battle.rightBase, '').isAlive, Date.now())) return;
+        battle.game.end();
+        this.roundResults = this.contributions.freeze();
+        this.showSettlement();
+        this.appendLog('结算', this.round.winner === 'draw' ? '双方基地均被摧毁，本局平局。' : `${this.round.winner === 'left' ? '红方' : '蓝方'}获胜。`);
+        this.syncState();
+        this.restartTimer = window.setTimeout(() => {
+            const restart = this.restart;
+            if (!restart) return;
+            void restart().catch((error: Error) => {
+                this.state.runtimeStatus.lastError = `重新开局失败：${error.message}`;
+                this.appendLog('系统', this.state.runtimeStatus.lastError);
+                this.syncState();
+            });
+        }, Math.max(0, this.round.restartAt - Date.now()));
+    }
+
+    private static updateRoundSummary(): void {
+        if (this.ui.settlementCountdown && this.round.phase === 'settling') this.ui.settlementCountdown.textContent = String(Math.max(0, Math.ceil((this.round.restartAt - Date.now()) / 1000)));
+        if (!this.ui.roundSummary) return;
+        const result = this.round.winner === 'draw' ? '平局' : this.round.winner === 'left' ? '红方获胜' : '蓝方获胜';
+        this.ui.roundSummary.textContent = this.round.phase === 'settling'
+            ? `第 ${this.round.id} 局 · ${result}\n${Math.max(0, Math.ceil((this.round.restartAt - Date.now()) / 1000))} 秒后开启下一局`
+            : this.round.phase === 'running' ? `第 ${this.round.id} 局 · 对战中` : '正在准备战场';
+    }
+
     private static startSimulationLoops(): void {
         if (!this.battle) {
             return;
         }
         this.gameTickTimer = window.setInterval(() => {
             try {
-                this.battle?.game.update();
+                this.updateBattle();
+                this.updateRoundSummary();
+                this.followArmies();
                 this.clampBattleCamera();
                 this.renderBattleLabels();
             } catch (error) {
@@ -1754,7 +1952,7 @@ export class LiveInteractionTester {
                 await this.emitMockEvent('like', { uname: '观众B', likeCount: 3 });
                 return;
             case 'mock-gift':
-                await this.emitMockEvent('gift', { uname: '舰队长', giftName: '辣条', giftNum: 5, price: 100, totalPrice: 500 });
+                await this.emitMockEvent('gift', { uname: '礼物观众', giftName: '测试礼物', giftNum: 5, price: 1, totalPrice: 5 });
                 return;
             case 'mock-guard':
                 await this.emitMockEvent('guard', { uname: '总督', guardLevel: 3, totalPrice: 2000 });
@@ -1763,10 +1961,10 @@ export class LiveInteractionTester {
                 await this.emitMockEvent('super-chat', { uname: '醒目留言用户', price: 30, totalPrice: 3000, message: '蓝军冲锋' });
                 return;
             case 'mock-danmaku-left':
-                await this.emitMockEvent('danmaku', { uname: '弹幕兵', message: '红军 上上上' });
+                await this.emitMockEvent('danmaku', { uname: '红方弹幕观众', openId: 'mock:red-danmaku', message: '红军 进攻' });
                 return;
             case 'mock-danmaku-right':
-                await this.emitMockEvent('danmaku', { uname: '弹幕兵', message: '蓝军 冲锋' });
+                await this.emitMockEvent('danmaku', { uname: '蓝方弹幕观众', openId: 'mock:blue-danmaku', message: '蓝军 冲锋' });
                 return;
             case 'mock-danmaku-custom':
                 await this.emitMockEvent('danmaku', {
@@ -1811,6 +2009,9 @@ export class LiveInteractionTester {
     }
 
     private static handleInteractionEvent(event: NormalizedInteractionEvent): void {
+        if (this.round.phase !== 'running' || event.timestamp < this.round.startedAt || this.seenEvents.has(event.id)) return;
+        this.seenEvents.add(event.id);
+        if (this.seenEvents.size > 5000) this.seenEvents.delete(this.seenEvents.values().next().value!);
         this.state.lastEvent = event;
         this.state.runtimeStatus.eventCount = Math.max(this.state.runtimeStatus.eventCount, (this.state.runtimeStatus.eventCount ?? 0) + 1);
         this.state.runtimeStatus.lastEventAt = event.timestamp;
@@ -1820,6 +2021,8 @@ export class LiveInteractionTester {
             this.syncState();
             return;
         }
+        plan.side = this.contributions.sideFor(event.openId) ?? plan.side;
+        this.contributions.credit(event, plan.side);
         this.spawnWave(plan);
         this.appendLog('事件', this.describeEvent(event, plan));
         this.syncState();
@@ -1877,6 +2080,7 @@ export class LiveInteractionTester {
         const targetTile = plan.side === 'left' ? battle.leftTarget : battle.rightTarget;
         const spawnAnchor = plan.side === 'left' ? battle.leftAnchor : battle.rightAnchor;
         const unitCatalog = battle.unitCatalog;
+        let spawned = 0;
         const batchIds = new Set<string>();
         let remainingLabels = plan.viewerLabel ? MAX_UNIT_LABELS_PER_WAVE : 0;
         const spawnUnitBatch = (unitName: string, count: number) => {
@@ -1894,6 +2098,7 @@ export class LiveInteractionTester {
                     infantrySpawnIndex += 1;
                 }
                 battle.game.spawnObject(unit, tile);
+                spawned++;
                 if (plan.veteran && unit.veteranTrait?.setVeteranLevel) {
                     unit.veteranTrait.setVeteranLevel(1);
                 }
@@ -1910,11 +2115,7 @@ export class LiveInteractionTester {
         spawnUnitBatch(unitCatalog.infantryElite, plan.infantryElite ?? 0);
         spawnUnitBatch(unitCatalog.infantryBasic, plan.infantryBasic ?? 0);
         const sideStats = plan.side === 'left' ? this.state.left : this.state.right;
-        sideStats.totalSpawned +=
-            (plan.infantryBasic ?? 0) +
-            (plan.infantryElite ?? 0) +
-            (plan.vehicleLight ?? 0) +
-            (plan.vehicleHeavy ?? 0);
+        sideStats.totalSpawned += spawned;
         sideStats.lastReinforcementAt = Date.now();
     }
 
@@ -1952,7 +2153,7 @@ export class LiveInteractionTester {
 
     private static refreshOrders(): void {
         const battle = this.battle;
-        if (!battle) {
+        if (!battle || this.round.phase !== 'running') {
             return;
         }
         const refreshSide = (player: Player, targetBase: any, targetTile: any) => {
@@ -2003,7 +2204,11 @@ export class LiveInteractionTester {
             return;
         }
         this.setBattleZoom(this.computeOverviewZoom());
-        battle.worldScene.cameraPan.setPan(this.computeOverviewPan());
+        const left = IsoCoords.vecWorldToScreen(battle.leftBase.position.worldPosition);
+        const right = IsoCoords.vecWorldToScreen(battle.rightBase.position.worldPosition);
+        const helper = new MapPanningHelper(battle.gameMap as any);
+        battle.worldScene.cameraPan.setPan(helper.computeCameraPanFromScreen({ x: (left.x + right.x) / 2, y: (left.y + right.y) / 2 }));
+        this.cameraManualUntil = withLog ? Date.now() + 4000 : 0;
         this.clampBattleCamera();
         this.syncState();
         if (withLog) {
@@ -2013,7 +2218,7 @@ export class LiveInteractionTester {
 
     private static describeEvent(event: NormalizedInteractionEvent, plan: WavePlan): string {
         const source = event.uname ? `${event.uname}` : '匿名观众';
-        const sideLabel = plan.side === 'left' ? '红方上路' : '蓝方下路';
+        const sideLabel = plan.side === 'left' ? '红方左侧' : '蓝方右侧';
         const units: string[] = [];
         if (plan.infantryBasic) {
             units.push(`基础步兵 x${plan.infantryBasic}`);
@@ -2050,6 +2255,8 @@ export class LiveInteractionTester {
     }
 
     private static syncState(): void {
+        this.updateRoundSummary();
+        this.updateBroadcastHud();
         const battle = this.battle;
         const leftAlive = battle ? this.countAliveUnits(battle.leftPlayer) : 0;
         const rightAlive = battle ? this.countAliveUnits(battle.rightPlayer) : 0;
@@ -2069,7 +2276,7 @@ export class LiveInteractionTester {
             this.ui.statusBadge.textContent = runtimeStatus.lastError
                 ? `状态: ${runtimeStatus.lastError}`
                 : runtimeStatus.sessionActive
-                    ? `状态: 已连接直播间 ${runtimeStatus.anchor?.roomId ?? '-'}`
+                    ? runtimeStatus.mode === 'mock' ? '状态: 本地模拟进行中' : `状态: 已连接直播间 ${runtimeStatus.anchor?.roomId ?? '-'}`
                     : runtimeStatus.connected
                         ? `状态: ${runtimeStatus.mode === 'mock' ? '本地模拟已就绪' : '直播连接中'}`
                         : '状态: 未连接本地运行时';
@@ -2087,7 +2294,7 @@ export class LiveInteractionTester {
         }
         if (this.ui.leftSummary) {
             this.ui.leftSummary.textContent = [
-                '红方上方老家',
+                '红方左侧老家',
                 `基地血量: ${leftBaseStatus.hpDisplay}`,
                 `存活单位: ${leftAlive}`,
                 `累计出兵: ${this.state.left.totalSpawned}`,
@@ -2097,7 +2304,7 @@ export class LiveInteractionTester {
         }
         if (this.ui.rightSummary) {
             this.ui.rightSummary.textContent = [
-                '蓝方下方老家',
+                '蓝方右侧老家',
                 `基地血量: ${rightBaseStatus.hpDisplay}`,
                 `存活单位: ${rightAlive}`,
                 `累计出兵: ${this.state.right.totalSpawned}`,
@@ -2174,6 +2381,8 @@ export class LiveInteractionTester {
         const battleViewport = battle?.worldScene?.viewport ?? this.computeBattleViewport(viewport);
         const cameraSafety = this.getCameraSafetyState();
         return {
+            round: { ...this.round },
+            contributions: this.contributions.ranking(),
             ready: this.state.ready,
             mode: this.state.mode,
             runtimeStatus: this.state.runtimeStatus,

@@ -166,6 +166,11 @@ export class GameRes {
                 rfs.addDirectory(mapRfsDir);
             }
         }
+        if (!currentConfig && this.appConfig.gameresBaseUrl) {
+            currentConfig = new GameResConfig(this.appConfig.gameresBaseUrl);
+            currentConfig.source = GameResSource.Cdn;
+            configRequiresSave = true;
+        }
         if (currentConfig) {
             const splashBg = await this.loadSplashScreenBackground(rfs?.getRootDirectory(), modRfsDir, currentConfig);
             if (typeof splashBg === 'string') {

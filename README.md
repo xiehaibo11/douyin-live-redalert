@@ -1,4 +1,41 @@
-# RA2WEB React
+# 抖音直播红警互动游戏
+
+面向直播互动的红警游戏原型，基于 [huangkaoya/ts-redalert2](https://github.com/huangkaoya/ts-redalert2) 开发。当前提供本地模拟事件、9:16 竖屏左右战场、随兵力分布移动的镜头、全局小地图、每局个人贡献榜，以及 10 秒结算后自动重开。
+
+**当前状态：尚未接入真实抖音数据；Windows 实机和长时间高兵力压力测试未做。**
+
+目前的浏览器演示和自动化验证均使用模拟弹幕、点赞、礼物，不能视为真实直播接入已完成。Windows 启动脚本已提供，仍需在 Windows 机器上实际验收。
+
+## 启动本地模拟版
+
+安装 Bun 1.3 及以上，在项目目录运行：
+
+```bash
+bun install --frozen-lockfile
+bun run live:start
+```
+
+访问 `http://127.0.0.1:4189/#/liveinteraction`，点击顶部“设置”使用模拟事件按钮。Windows 可使用项目根目录的 `start-live.bat`。
+
+首次启动会准备资源并构建前端。下载缓存、生成的游戏素材、构建产物和本机测试报告不包含在 Git 提交中。资源来源及准备过程见下文“本地直播模拟开发”。
+
+## 已实现与待完成
+
+- 已实现：竖屏左右对战、自动进攻、全局小地图和随兵力分布平滑移动的镜头。
+- 已实现：按观众 ID 记录每局贡献，基础贡献上限 1 万分，礼物贡献另计；同分时礼物贡献优先。
+- 已实现：胜负结算、贡献 MVP、10 秒倒计时、榜单冻结和新局清零。
+- 本机已验证：类型检查、生产构建、174 个测试及浏览器模拟对局流程。
+- 待完成：真实抖音数据接入、Windows 实机验收、长时间高兵力压力测试。
+
+## 上游与参考项目
+
+主工程保留上游 `ts-redalert2` 的 Git 历史、GPL-3.0 许可证及原有说明，开发起点为提交 `823c6637bab9ca1edafaa022a1040ed1fc59c274`。
+
+[ape-byte/DouyinBarrageGrab](https://github.com/ape-byte/DouyinBarrageGrab) 用作后续抖音采集接入参考，[KeJunMao/open-block-war](https://github.com/KeJunMao/open-block-war) 用作个人积分、排序和结算流程参考。它们目前不是本仓库的运行依赖，真实采集适配尚未实现。
+
+以下保留上游项目的来源、使用及许可证说明。游戏美术素材的授权范围与代码许可证需分别核对。
+
+## RA2WEB React 上游说明
 
 免责声明：这是基于《红色井界》RA2WEB www.ra2web.com 的分析而开发，并意图基于最新的react和three版本进行重构。但请注意，本项目与运行在 www.ra2web.com 站点上的版本无关。
 
@@ -85,6 +122,34 @@ bun run typecheck:entry
 ```
 
 ## 自动化回归
+
+### 本地直播模拟开发
+
+在 Windows 安装 Bun 1.3 及以上后，可以双击项目根目录的 `start-live.bat`，或在终端运行：
+
+```bash
+bun install --frozen-lockfile
+bun run live:start
+```
+
+访问 `http://127.0.0.1:4189/#/liveinteraction`。右侧的模拟点赞、礼物、弹幕按钮可以生成增援，单位会攻击敌方基地；画面采用完整的 9:16 竖屏，红方在左、蓝方在右；主镜头平滑跟随存活兵力分布，底部小地图显示全局。基地被摧毁后显示胜负、贡献 MVP 和本局贡献榜，倒计时 10 秒后自动创建新一局。结算期间收到的事件不计分、不出兵，下一局贡献清零。目前尚未启用真实直播采集。
+
+`live:start` 会准备本地资源、构建前端并启动仅监听本机的 HTTP/SSE 服务。首次准备会下载本项目 `config.ini` 所配置来源的素材包 `https://download.ra2web.com/full-pack.7z`（约 110 MiB），提取素材并整理为 `public/cdn/game-res/v2/` 中的 18 个 MIX 文件。`manifest.json` 保存 CRC32 校验值及来源包 SHA256。游戏美术来自该上游素材包；平地双人地图及加载背景由脚本生成。素材来源与许可须按本项目现有说明核对。
+
+生成文件和下载缓存不纳入 Git。缓存位于 `.artifacts/source/`，已有缓存时无需重复下载。资源包、缓存及构建目录需要约 1 GiB 的可用空间。也可以单独运行 `bun run assets:prepare`，或用 `bun run assets:prepare "本地素材包.7z"` 指定包含 `RA2.MIX`、`LANGUAGE.MIX` 的素材包。
+
+开发时在两个终端分别运行 `bun run live:runtime` 和 `bun run dev`，访问 Vite 输出的 HTTPS 地址（默认端口 4000）。Vite 会将直播 API 转发到本机 4189 端口。
+
+```bash
+bun run typecheck:entry
+bun test
+bun run build
+bun run debug:live-interaction
+```
+
+贡献规则集中在 `src/game/live/ContributionLedger.ts`：点赞每次 1 分、弹幕每条 20 分，每位观众每局的非礼物基础贡献合计最多 10000 分；礼物按本次总抖币数每抖币 10000 分另计，不受基础贡献上限限制。排行按总贡献降序，同分时礼物贡献优先。观众身份使用字符串 ID，同名观众分开统计；首次参与后的阵营在本局保持一致。上述礼物倍率为当前初版参数。
+
+直播模块已纳入主入口类型检查和生产构建。端到端脚本使用本机 Chrome 或 Playwright Chromium，实际验证模拟出兵、自动战斗、基地摧毁、10 秒结算看板、贡献榜冻结、自动重开、积分清零，以及 540 像素和 390 像素竖屏无横向裁切。缺少浏览器时运行 `bunx playwright install chromium`，或用 `CHROME_PATH` 指定 Chrome 程序路径。测试报告和截图保存在 `.artifacts/live-interaction/`。
 
 仓库当前已经不再只依赖手点验证。`scripts/` 下维护了一组可直接执行的回归脚本，主要覆盖大厅、进图、机制和 tester 入口。
 
